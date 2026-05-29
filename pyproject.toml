@@ -1,7 +1,26 @@
 [project]
 name = "swadoc"
 version = "0.1.0"
-description = "Add your description here"
+description = "Swagger Auto-Documentation Script - Automatically enriches OpenAPI/Swagger annotations using LLM"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "click>=8.0.0",
+    "python-dotenv>=1.0.0",
+    "httpx>=0.27.0",
+    "pyyaml>=6.0.0",
+    "openapi-spec-validator>=0.7.0",
+]
+
+[project.scripts]
+swadoc = "swadoc.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "strict"
