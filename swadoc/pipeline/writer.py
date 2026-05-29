@@ -217,13 +217,46 @@ class AnnotationWriter:
 
         # ------------------------------------------------------------------
         # Check 1: balanced /** ... */ doc-comment delimiters
+        #
+        # Count only the closing '*/' tokens that correspond to a '/**'
+        # opener, not those from regular block comments ('/* ... */').
+        # Strategy: count '/**' openers and find their matching '*/'.
+        # A simpler safe approximation: verify that the number of '/**'
+        # openers does not exceed the number of '*/' closers (every doc-
+        # comment must be closed), and that no '/**' is left unclosed by
+        # scanning the file linearly.
         # ------------------------------------------------------------------
         open_count = content.count("/**")
         close_count = content.count("*/")
-        if open_count != close_count:
+        # '*/' count must be >= '/**' count (regular /* */ also contribute
+        # closing tokens, so close_count >= open_count is the invariant).
+        if close_count < open_count:
             return (
                 f"unbalanced doc-comment delimiters: "
                 f"{open_count} opening '/**' vs {close_count} closing '*/'"
+            )
+        # Additionally verify no unclosed '/**' by linear scan
+        depth = 0
+        i = 0
+        while i < len(content) - 1:
+            two = content[i:i+2]
+            three = content[i:i+3]
+            if three == "/**":
+                depth += 1
+                i += 3
+            elif two == "/*":
+                # Regular block comment — skip to its closing */
+                end = content.find("*/", i + 2)
+                i = end + 2 if end != -1 else len(content)
+            elif two == "*/" and depth > 0:
+                depth -= 1
+                i += 2
+            else:
+                i += 1
+        if depth != 0:
+            return (
+                f"unbalanced doc-comment delimiters: "
+                f"{depth} unclosed '/**' block(s) detected"
             )
 
         # ------------------------------------------------------------------
