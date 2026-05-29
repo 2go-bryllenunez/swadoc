@@ -161,9 +161,12 @@ class PipelineOrchestrator:
                 # Build LLM client if not injected
                 if self._llm_client is None:
                     self._llm_client = LLMClientFactory.create(
-                        self._config.llm_provider,
-                        self._config.llm_model,
-                        self._config.llm_api_key,
+                        provider=self._config.llm_provider,
+                        model=self._config.llm_model,
+                        api_key=self._config.llm_api_key,
+                        aws_access_key_id=self._config.aws_access_key_id,
+                        aws_secret_access_key=self._config.aws_secret_access_key,
+                        aws_region=self._config.aws_region,
                     )
 
                 # Determine annotation format from adapter

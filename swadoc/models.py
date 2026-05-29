@@ -130,8 +130,12 @@ class SwadocConfig:
     output_path: Path
     dry_run: bool = False
     open_pr: bool = False
-    llm_provider: str | None = None  # "anthropic" or "openai"
+    llm_provider: str | None = None  # "anthropic", "openai", or "bedrock"
     llm_model: str | None = None
     llm_api_key: str | None = None
     github_token: str | None = None
     github_repo: str | None = None
+    # AWS Bedrock credentials (only required when llm_provider="bedrock")
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_region: str | None = None

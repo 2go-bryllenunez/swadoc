@@ -16,7 +16,7 @@ from swadoc.models import SwadocConfig
 
 # Accepted literal values for validated fields
 VALID_CODE_BASES: frozenset[str] = frozenset({"node", "php"})
-VALID_LLM_PROVIDERS: frozenset[str] = frozenset({"anthropic", "openai"})
+VALID_LLM_PROVIDERS: frozenset[str] = frozenset({"anthropic", "openai", "bedrock"})
 
 DEFAULT_OUTPUT_PATH = "./openapi.json"
 
@@ -88,6 +88,11 @@ def load_config(
     github_token: str | None = os.environ.get("GITHUB_TOKEN") or None
     github_repo: str | None = os.environ.get("GITHUB_REPO") or None
 
+    # AWS Bedrock settings — environment only
+    aws_access_key_id: str | None = os.environ.get("AWS_ACCESS_KEY_ID") or None
+    aws_secret_access_key: str | None = os.environ.get("AWS_SECRET_ACCESS_KEY") or None
+    aws_region: str | None = os.environ.get("AWS_REGION") or None
+
     config = SwadocConfig(
         code_base=resolved_code_base or "",  # placeholder; validate_config checks this
         project_path=Path(resolved_project_path_str) if resolved_project_path_str else Path("."),
@@ -99,6 +104,9 @@ def load_config(
         llm_api_key=llm_api_key,
         github_token=github_token,
         github_repo=github_repo,
+        aws_access_key_id=aws_access_key_id,
+        aws_secret_access_key=aws_secret_access_key,
+        aws_region=aws_region,
     )
 
     # Store whether project_path was explicitly provided so validate_config can
@@ -187,8 +195,17 @@ def validate_llm_config(config: SwadocConfig) -> None:
         missing.append("LLM_PROVIDER")
     if not config.llm_model:
         missing.append("LLM_MODEL")
-    if not config.llm_api_key:
-        missing.append("LLM_API_KEY")
+
+    if config.llm_provider == "bedrock":
+        # For Bedrock, AWS credentials are optional (boto3 uses its own chain),
+        # but we warn if neither explicit keys nor a region are set.
+        if not config.aws_region:
+            missing.append("AWS_REGION")
+    else:
+        # Anthropic and OpenAI require an API key
+        if not config.llm_api_key:
+            missing.append("LLM_API_KEY")
+
     if missing:
         raise ConfigError(
             f"Missing required configuration value(s): {', '.join(missing)}."

@@ -258,6 +258,107 @@ class OpenAIClient:
 
 
 # ---------------------------------------------------------------------------
+# AWS Bedrock implementation
+# ---------------------------------------------------------------------------
+
+
+class BedrockClient:
+    """LLMClient implementation that calls AWS Bedrock Runtime via boto3.
+
+    Uses the ``bedrock-runtime`` boto3 client with ``invoke_model`` for
+    synchronous calls, wrapped in asyncio to satisfy the async protocol.
+
+    Supports Claude models on Bedrock (``anthropic.claude-*`` model IDs).
+    Auth is handled by boto3 using the standard AWS credential chain
+    (env vars, ~/.aws/credentials, IAM role, etc.).
+    """
+
+    def __init__(
+        self,
+        model: str,
+        region: str,
+        aws_access_key_id: str | None = None,
+        aws_secret_access_key: str | None = None,
+    ) -> None:
+        self._model = model
+        self._region = region
+        self._aws_access_key_id = aws_access_key_id
+        self._aws_secret_access_key = aws_secret_access_key
+
+    def _make_boto_client(self):
+        """Create a boto3 bedrock-runtime client."""
+        import boto3  # type: ignore[import-untyped]
+
+        kwargs: dict = {"region_name": self._region}
+        if self._aws_access_key_id and self._aws_secret_access_key:
+            kwargs["aws_access_key_id"] = self._aws_access_key_id
+            kwargs["aws_secret_access_key"] = self._aws_secret_access_key
+
+        return boto3.client("bedrock-runtime", **kwargs)
+
+    async def complete(self, prompt: str, timeout: float = 30.0) -> LLMResponse:
+        """Call AWS Bedrock Runtime and return a normalised response.
+
+        Uses ``invoke_model`` with the Anthropic Claude message format.
+        The boto3 call is run in a thread pool executor to avoid blocking
+        the event loop.
+        """
+        import asyncio
+        import functools
+
+        payload = json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 4096,
+            "messages": [{"role": "user", "content": prompt}],
+        })
+
+        def _invoke() -> dict:
+            client = self._make_boto_client()
+            response = client.invoke_model(
+                modelId=self._model,
+                body=payload,
+                contentType="application/json",
+                accept="application/json",
+            )
+            return json.loads(response["body"].read())
+
+        loop = asyncio.get_event_loop()
+        try:
+            data = await asyncio.wait_for(
+                loop.run_in_executor(None, _invoke),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            raise LLMTimeoutError("bedrock", timeout) from exc
+        except Exception as exc:
+            # Map boto3/botocore errors to our exception types
+            exc_str = str(exc)
+            exc_type = type(exc).__name__
+
+            if "UnrecognizedClientException" in exc_type or "InvalidSignatureException" in exc_type:
+                raise LLMAuthError("bedrock", 403) from exc
+            if "AccessDeniedException" in exc_type or "AuthorizationError" in exc_type:
+                raise LLMAuthError("bedrock", 403) from exc
+            if "EndpointResolutionError" in exc_type or "ConnectTimeoutError" in exc_type:
+                raise LLMNetworkError("bedrock", exc_str) from exc
+            raise LLMNetworkError("bedrock", exc_str) from exc
+
+        # Parse Claude-on-Bedrock response (same shape as Anthropic direct API)
+        content_blocks = data.get("content", [])
+        text = "".join(
+            block.get("text", "")
+            for block in content_blocks
+            if block.get("type") == "text"
+        )
+        usage_data = data.get("usage", {})
+        usage = TokenUsage(
+            input_tokens=usage_data.get("input_tokens", 0),
+            output_tokens=usage_data.get("output_tokens", 0),
+        )
+        return LLMResponse(content=text, usage=usage, model=self._model)
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -265,17 +366,27 @@ class OpenAIClient:
 class LLMClientFactory:
     """Creates the appropriate LLMClient based on provider configuration."""
 
-    _SUPPORTED_PROVIDERS = ("anthropic", "openai")
+    _SUPPORTED_PROVIDERS = ("anthropic", "openai", "bedrock")
 
     @staticmethod
-    def create(provider: str, model: str, api_key: str) -> LLMClient:
+    def create(
+        provider: str,
+        model: str,
+        api_key: str | None = None,
+        aws_access_key_id: str | None = None,
+        aws_secret_access_key: str | None = None,
+        aws_region: str | None = None,
+    ) -> LLMClient:
         """Instantiate an LLMClient for the given *provider*.
 
         Args:
-            provider: One of ``"anthropic"`` or ``"openai"`` (case-sensitive,
-                matching Requirement 1.9).
-            model: The model identifier to use (e.g. ``"claude-3-5-sonnet-20241022"``).
-            api_key: The provider API key.
+            provider: One of ``"anthropic"``, ``"openai"``, or ``"bedrock"``.
+            model: The model identifier.
+            api_key: API key for Anthropic or OpenAI (not used for Bedrock).
+            aws_access_key_id: AWS access key (Bedrock only; optional if using
+                the default boto3 credential chain).
+            aws_secret_access_key: AWS secret key (Bedrock only).
+            aws_region: AWS region (Bedrock only, e.g. ``"us-east-1"``).
 
         Returns:
             A concrete :class:`LLMClient` implementation.
@@ -284,9 +395,24 @@ class LLMClientFactory:
             ValueError: If *provider* is not a supported value.
         """
         if provider == "anthropic":
+            if not api_key:
+                raise ValueError("LLM_API_KEY is required for provider 'anthropic'.")
             return AnthropicClient(model=model, api_key=api_key)
+
         if provider == "openai":
+            if not api_key:
+                raise ValueError("LLM_API_KEY is required for provider 'openai'.")
             return OpenAIClient(model=model, api_key=api_key)
+
+        if provider == "bedrock":
+            region = aws_region or "us-east-1"
+            return BedrockClient(
+                model=model,
+                region=region,
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+            )
+
         raise ValueError(
             f"Unsupported LLM provider {provider!r}. "
             f"Accepted values: {', '.join(LLMClientFactory._SUPPORTED_PROVIDERS)}"
