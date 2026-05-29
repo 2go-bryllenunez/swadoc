@@ -671,16 +671,19 @@ class LaravelAdapter:
             )
 
         if result.returncode != 0:
+            # l5-swagger writes errors to stdout, not stderr
+            output_detail = (result.stdout or "").strip() or (result.stderr or "").strip()
             logger.error(
-                "l5-swagger:generate exited with code %d. stderr: %s",
+                "l5-swagger:generate exited with code %d.\nstdout: %s\nstderr: %s",
                 result.returncode,
+                result.stdout,
                 result.stderr,
             )
             return SpecGenerationResult(
                 success=False,
                 error=(
                     f"l5-swagger:generate exited with non-zero status "
-                    f"{result.returncode}. stderr: {result.stderr}"
+                    f"{result.returncode}. output: {output_detail}"
                 ),
             )
 
